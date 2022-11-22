@@ -13,36 +13,37 @@ import (
 
 const udsPath = "/tmp/transfer.sock"
 
+var cache = make(map[string]uintptr)
+
 func main() {
-	os.Remove(udsPath) //nolint: errcheck
-	lis, err := net.Listen("unix", udsPath)
+	os.Remove(udsPath)
+	transferListener, err := net.Listen("unix", udsPath)
 	if err != nil {
 		panic(err)
 	}
-	defer lis.Close()
+	defer transferListener.Close()
 
 	log.Println("Wait receiving listener ...")
-	conn, err := lis.Accept()
+	conn, err := transferListener.Accept()
 	if err != nil {
 		panic(err)
 	}
 	defer conn.Close()
 
-	c := receiveConn(conn.(*net.UnixConn)) // this is a net.Listener
-	//http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-	//	fmt.Fprintf(w, "[server2] Hello, world!")
-	//})
-	//log.Printf("Server is listening on %s ...\n", httpLis.Addr())
-	//http.Serve(httpLis, nil)
-	//h := httpLis.(*net.TCPListener)
-	//ff, _ := h.File()
-	//fmt.Println(ff.Name())
-	//go dataSocketListener(httpLis)
-	//conn, err = httpLis.Accept()
-	//if err != nil {
-	//	fmt.Println(err)
-	//	return
-	//}
+	c := receiveConn(conn.(*net.UnixConn)) // this is a net.Conn
+
+	lis, err := net.Listen("tcp", "127.0.0.1:7000")
+	if err != nil {
+		fmt.Println("unable to create new listener:", err)
+		return
+	}
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGINT)
+
+	stop := make(chan struct{})
+	exit := make(chan struct{})
+	go dataSocketListener(lis, stop, exit)
 
 	for {
 		buf := make([]byte, 1<<10)
@@ -54,9 +55,16 @@ func main() {
 		fmt.Printf("received %d bytes, data: %s", n, string(buf))
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGKILL, syscall.SIGINT)
+	fmt.Println("done with read, call close")
+	c.Close()
+
+	fmt.Println("waiting for term signal")
 	<-sig
+	fmt.Println("term signal received, exit")
+
+	fmt.Println("close listener")
+	lis.Close()
+
 }
 
 func receiveListener(conn *net.UnixConn) net.Listener {
@@ -122,7 +130,7 @@ func receiveConn(conn *net.UnixConn) net.Conn {
 
 	// construct net listener
 	f := os.NewFile(uintptr(fd), "listener")
-	//defer f.Close()
+	defer f.Close()
 
 	l, err := net.FileConn(f)
 	if err != nil {
@@ -147,10 +155,15 @@ func getConnFd(conn syscall.Conn) (connFd int, err error) {
 	return
 }
 
-func dataSocketListener(lis net.Listener) {
+func dataSocketListener(lis net.Listener, stop, exit chan struct{}) {
 	fmt.Println("listen to data socket:", lis.Addr())
 
-	defer lis.Close()
+	defer func() {
+		fmt.Println("defer closing listener")
+		lis.Close()
+		fmt.Println("listener closed")
+
+	}()
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
@@ -166,17 +179,25 @@ func dataSocketListener(lis net.Listener) {
 				return
 			}
 			defer func() {
-				//c.Close()
-				//f.Close()
-				//fmt.Printf("removing %s from cache\n", f.Name())
-				//delete(cache, f.Name())
+				c.Close()
+				f.Close()
+				fmt.Printf("removing %s from cache\n", f.Name())
+				delete(cache, f.Name())
 			}()
 
 			fmt.Printf("adding %s to cache\n", f.Name())
-			//cache[f.Name()] = f.Fd()
+			cache[f.Name()] = f.Fd()
 
 			buf := make([]byte, 1<<10) // 1024
+		readLoop:
 			for {
+				select {
+				case <-stop:
+					fmt.Println("receive on stop chan")
+					break readLoop
+				default:
+
+				}
 				n, err := c.Read(buf)
 				if err != nil {
 					if !errors.Is(err, io.EOF) {
@@ -187,6 +208,9 @@ func dataSocketListener(lis net.Listener) {
 
 				fmt.Printf("read %d bytes from %s to %s data=%s\n", n, conn.RemoteAddr(), conn.LocalAddr(), string(buf))
 			}
+
+			fmt.Println("wait for exit")
+			<-exit
 		}(conn.(*net.TCPConn))
 	}
 }
