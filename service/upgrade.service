@@ -1,0 +1,13 @@
+[Unit]
+Description = upgrade micro-service
+After=network.target
+
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+ExecStart = /home/mdeangelo/projects/socketa/upgrade/upgrade
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

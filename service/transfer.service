@@ -1,0 +1,15 @@
+[Unit]
+Description = transfer micro-service
+After=network.target
+
+StartLimitIntervalSec=500
+StartLimitBurst=5
+
+[Service]
+ExecStart = /home/mdeangelo/projects/socketa/subproc/master/master
+TimeoutStopSec=5
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
