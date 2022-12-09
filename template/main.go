@@ -17,7 +17,7 @@ import (
 
 const (
 	serverAddr = "127.0.0.1:7000"
-	udsPath = "/tmp/transfer.sock"
+	udsPath    = "/tmp/transfer.sock"
 )
 
 var cache = make(map[string]uintptr)
